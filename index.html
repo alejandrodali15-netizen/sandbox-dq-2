@@ -114,6 +114,12 @@
   .dia-abierto[data-fecha] { cursor: pointer; }
   .dia-cerrado-defecto { background: #f9fafb; color: var(--texto-suave); }
   .dia-cerrado-defecto .etiqueta-dia { color: var(--texto-suave); }
+
+  .dia-horario { padding: 10px 0; border-bottom: 1px solid var(--gris-borde); }
+  .dia-horario-titulo { font-weight: 600; margin-bottom: 6px; }
+  .bloques-dia { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
+  .fila-bloque { display: flex; align-items: center; gap: 8px; }
+  .boton-agregar-bloque, .boton-quitar-bloque { font-size: 12px; padding: 4px 10px; }
 </style>
 </head>
 <body>
@@ -160,9 +166,8 @@
   // exponer, porque todo lo que puede hacer está limitado por las políticas
   // de RLS (rls-panel-auth.sql), no por mantenerla en secreto.
   // ---------------------------------------------------------------------
-    const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
+  const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_NapnUGy_NJ061jKYtWRYuw_x-_vR-Yp';
-
 
   const { createClient } = supabase;
   const cliente = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -401,8 +406,26 @@
       return;
     }
 
+    // dia_semana -> lista de bloques {inicio, fin}, ordenados. Un día sin
+    // bloques está cerrado ese día — ya no hay un checkbox aparte, la
+    // presencia o ausencia de bloques ES la señal.
     const porDia = {};
-    horarios.forEach((h) => { porDia[h.dia_semana] = h; });
+    horarios.forEach((h) => {
+      if (!porDia[h.dia_semana]) porDia[h.dia_semana] = [];
+      porDia[h.dia_semana].push({ inicio: h.hora_inicio.slice(0, 5), fin: h.hora_fin.slice(0, 5) });
+    });
+    Object.values(porDia).forEach((lista) => lista.sort((a, b) => a.inicio.localeCompare(b.inicio)));
+
+    function filaBloqueHtml(inicio, fin) {
+      return `
+        <div class="fila-bloque">
+          <input type="time" class="hora-inicio" value="${inicio}" />
+          <span>a</span>
+          <input type="time" class="hora-fin" value="${fin}" />
+          <button type="button" class="secundario boton-quitar-bloque">Quitar</button>
+        </div>
+      `;
+    }
 
     contenido.className = '';
     contenido.innerHTML = `
@@ -412,18 +435,20 @@
           ${recursos.map((r) => `<option value="${r.id}" ${r.id === recursoSeleccionado ? 'selected' : ''}>${r.nombre}</option>`).join('')}
         </select>
       </div>
-      <div id="filasHorarios">
-        ${DIAS_SEMANA.map((nombreDia, i) => {
-          const existente = porDia[i];
-          return `
-            <div class="fila-horario" data-dia="${i}" style="display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px solid var(--gris-borde);">
-              <label style="width:120px;"><input type="checkbox" class="chk-abierto" ${existente ? 'checked' : ''} /> ${nombreDia}</label>
-              <input type="time" class="hora-inicio" value="${existente ? existente.hora_inicio.slice(0, 5) : '09:00'}" ${existente ? '' : 'disabled'} />
-              <span>a</span>
-              <input type="time" class="hora-fin" value="${existente ? existente.hora_fin.slice(0, 5) : '18:00'}" ${existente ? '' : 'disabled'} />
+      <div style="font-size:12px; color:var(--texto-suave); margin-bottom:12px;">
+        Un día sin ningún bloque queda cerrado. Puedes agregar más de un
+        bloque por día para horario partido (ej. 9:00-13:00 y 16:00-20:00).
+      </div>
+      <div id="diasHorarios">
+        ${DIAS_SEMANA.map((nombreDia, i) => `
+          <div class="dia-horario" data-dia="${i}">
+            <div class="dia-horario-titulo">${nombreDia}</div>
+            <div class="bloques-dia">
+              ${(porDia[i] || []).map((b) => filaBloqueHtml(b.inicio, b.fin)).join('')}
             </div>
-          `;
-        }).join('')}
+            <button type="button" class="secundario boton-agregar-bloque">+ Agregar bloque</button>
+          </div>
+        `).join('')}
       </div>
       <div style="margin-top:16px; display:flex; align-items:center; gap:12px;">
         <button id="botonGuardarHorarios">Guardar horarios</button>
@@ -436,16 +461,24 @@
       cargarVistaHorarios();
     });
 
-    document.querySelectorAll('.chk-abierto').forEach((chk) => {
-      chk.addEventListener('change', (e) => {
-        const fila = e.target.closest('.fila-horario');
-        const habilitar = e.target.checked;
-        fila.querySelector('.hora-inicio').disabled = !habilitar;
-        fila.querySelector('.hora-fin').disabled = !habilitar;
+    document.querySelectorAll('.boton-agregar-bloque').forEach((boton) => {
+      boton.addEventListener('click', () => {
+        const contenedorBloques = boton.previousElementSibling; // .bloques-dia
+        contenedorBloques.insertAdjacentHTML('beforeend', filaBloqueHtml('09:00', '18:00'));
+        activarBotonesQuitarBloque();
       });
     });
+    activarBotonesQuitarBloque();
 
     document.getElementById('botonGuardarHorarios').addEventListener('click', guardarHorarios);
+  }
+
+  function activarBotonesQuitarBloque() {
+    // Usa .onclick (no addEventListener) para poder llamarse varias veces
+    // sin ir acumulando listeners duplicados en los botones que ya tenían.
+    document.querySelectorAll('.boton-quitar-bloque').forEach((boton) => {
+      boton.onclick = () => boton.closest('.fila-bloque').remove();
+    });
   }
 
   async function guardarHorarios() {
@@ -453,32 +486,47 @@
     mensaje.textContent = 'Guardando...';
     mensaje.style.color = 'var(--texto-suave)';
 
-    const filas = document.querySelectorAll('.fila-horario');
+    const contenedoresDias = document.querySelectorAll('.dia-horario');
     const nuevos = [];
-    for (const fila of filas) {
-      const abierto = fila.querySelector('.chk-abierto').checked;
-      if (!abierto) continue;
 
-      const dia = Number(fila.dataset.dia);
-      const horaInicio = fila.querySelector('.hora-inicio').value;
-      const horaFin = fila.querySelector('.hora-fin').value;
+    for (const contenedorDia of contenedoresDias) {
+      const dia = Number(contenedorDia.dataset.dia);
+      const bloquesDelDia = [];
 
-      if (!horaInicio || !horaFin) {
-        mensaje.textContent = `Falta la hora en ${DIAS_SEMANA[dia]}.`;
-        mensaje.style.color = 'var(--rojo)';
-        return;
+      for (const fila of contenedorDia.querySelectorAll('.fila-bloque')) {
+        const horaInicio = fila.querySelector('.hora-inicio').value;
+        const horaFin = fila.querySelector('.hora-fin').value;
+
+        if (!horaInicio || !horaFin) {
+          mensaje.textContent = `Falta una hora en ${DIAS_SEMANA[dia]}.`;
+          mensaje.style.color = 'var(--rojo)';
+          return;
+        }
+        if (horaFin <= horaInicio) {
+          mensaje.textContent = `En ${DIAS_SEMANA[dia]}, cada bloque debe cerrar después de abrir.`;
+          mensaje.style.color = 'var(--rojo)';
+          return;
+        }
+        bloquesDelDia.push({ horaInicio, horaFin });
       }
-      if (horaFin <= horaInicio) {
-        mensaje.textContent = `En ${DIAS_SEMANA[dia]}, la hora de cierre debe ser después de la de apertura.`;
-        mensaje.style.color = 'var(--rojo)';
-        return;
+
+      bloquesDelDia.sort((a, b) => a.horaInicio.localeCompare(b.horaInicio));
+      for (let i = 1; i < bloquesDelDia.length; i++) {
+        if (bloquesDelDia[i].horaInicio < bloquesDelDia[i - 1].horaFin) {
+          mensaje.textContent = `En ${DIAS_SEMANA[dia]}, hay bloques que se traslapan entre sí.`;
+          mensaje.style.color = 'var(--rojo)';
+          return;
+        }
       }
-      nuevos.push({ recurso_id: recursoSeleccionado, dia_semana: dia, hora_inicio: horaInicio, hora_fin: horaFin });
+
+      bloquesDelDia.forEach((b) => {
+        nuevos.push({ recurso_id: recursoSeleccionado, dia_semana: dia, hora_inicio: b.horaInicio, hora_fin: b.horaFin });
+      });
     }
 
     // Reemplaza todo el horario del recurso: borra lo que había y mete lo
     // nuevo. Es más simple y menos propenso a errores que tratar de calcular
-    // qué cambió fila por fila.
+    // qué cambió bloque por bloque.
     const { error: errBorrar } = await cliente
       .from('horarios_laborales')
       .delete()
