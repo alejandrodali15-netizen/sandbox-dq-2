@@ -682,7 +682,7 @@
 
     const { data: servicios, error } = await cliente
       .from('servicios')
-      .select('id, nombre, duracion_min, precio, anticipo')
+      .select('id, nombre, descripcion, duracion_min, precio, anticipo')
       .eq('negocio_id', negocioActual)
       .order('nombre');
     if (error) {
@@ -693,23 +693,30 @@
 
     contenido.className = '';
     contenido.innerHTML = `
-      <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
-        <input type="text" id="nombreNuevoServicio" placeholder="Nombre del servicio" style="width:180px;" />
-        <input type="number" id="duracionNuevoServicio" placeholder="Duración (min)" min="1" style="width:130px;" />
-        <input type="number" id="precioNuevoServicio" placeholder="Precio" min="0" step="0.01" style="width:110px;" />
-        <input type="number" id="anticipoNuevoServicio" placeholder="Anticipo" min="0" step="0.01" style="width:110px;" />
-        <button id="botonAgregarServicio">Agregar servicio</button>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-bottom:12px; max-width:640px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <input type="text" id="nombreNuevoServicio" placeholder="Nombre del servicio" style="width:180px;" />
+          <input type="number" id="duracionNuevoServicio" placeholder="Duración (min)" min="1" style="width:130px;" />
+          <input type="number" id="precioNuevoServicio" placeholder="Precio" min="0" step="0.01" style="width:110px;" />
+          <input type="number" id="anticipoNuevoServicio" placeholder="Anticipo" min="0" step="0.01" style="width:110px;" />
+        </div>
+        <input type="text" id="descripcionNuevoServicio" placeholder="Descripción (opcional) — ej. incluye lavado y secado" style="width:100%;" />
+        <div><button id="botonAgregarServicio">Agregar servicio</button></div>
       </div>
       <div id="mensajeServicios" style="font-size:13px; margin-bottom:12px;"></div>
       ${servicios.length === 0 ? '<div class="vacio">Todavía no hay servicios.</div>' : `
         <table>
-          <thead><tr><th>Nombre</th><th>Duración (min)</th><th>Precio</th><th>Anticipo</th><th></th></tr></thead>
+          <thead><tr><th>Nombre</th><th>Descripción</th><th>Duración (min)</th><th>Precio</th><th>Anticipo</th><th></th></tr></thead>
           <tbody>
             ${servicios.map((s) => `
               <tr data-id="${s.id}">
                 <td>
                   <span class="texto-nombre">${s.nombre}</span>
                   <input type="text" class="input-nombre" value="${s.nombre}" style="display:none; width:140px;" />
+                </td>
+                <td>
+                  <span class="texto-descripcion">${s.descripcion ?? '—'}</span>
+                  <input type="text" class="input-descripcion" value="${s.descripcion ?? ''}" style="display:none; width:200px;" />
                 </td>
                 <td>
                   <span class="texto-duracion">${s.duracion_min}</span>
@@ -739,7 +746,7 @@
 
     document.querySelectorAll('tr[data-id]').forEach((fila) => {
       const id = fila.dataset.id;
-      const campos = ['nombre', 'duracion', 'precio', 'anticipo'].map((campo) => ({
+      const campos = ['nombre', 'descripcion', 'duracion', 'precio', 'anticipo'].map((campo) => ({
         campo,
         span: fila.querySelector(`.texto-${campo}`),
         input: fila.querySelector(`.input-${campo}`),
@@ -758,9 +765,10 @@
       });
 
       botonGuardar.addEventListener('click', () => {
-        const [nombreEl, duracionEl, precioEl, anticipoEl] = campos.map((c) => c.input);
+        const [nombreEl, descripcionEl, duracionEl, precioEl, anticipoEl] = campos.map((c) => c.input);
         editarServicio(id, {
           nombre: nombreEl.value,
+          descripcion: descripcionEl.value,
           duracionMin: duracionEl.value,
           precio: precioEl.value,
           anticipo: anticipoEl.value,
@@ -774,6 +782,7 @@
   async function agregarServicio() {
     const mensaje = document.getElementById('mensajeServicios');
     const nombre = document.getElementById('nombreNuevoServicio').value.trim();
+    const descripcion = document.getElementById('descripcionNuevoServicio').value.trim();
     const duracionMin = document.getElementById('duracionNuevoServicio').value;
     const precio = document.getElementById('precioNuevoServicio').value || 0;
     const anticipo = document.getElementById('anticipoNuevoServicio').value || 0;
@@ -800,6 +809,7 @@
     const { error } = await cliente.from('servicios').insert({
       negocio_id: negocioActual,
       nombre,
+      descripcion: descripcion || null,
       duracion_min: Number(duracionMin),
       precio: Number(precio),
       anticipo: Number(anticipo),
@@ -815,6 +825,7 @@
   async function editarServicio(id, valores) {
     const mensaje = document.getElementById('mensajeServicios');
     const nombre = valores.nombre.trim();
+    const descripcion = valores.descripcion.trim();
     const duracionMin = Number(valores.duracionMin);
     const precio = Number(valores.precio);
     const anticipo = Number(valores.anticipo);
@@ -837,7 +848,7 @@
 
     const { error } = await cliente
       .from('servicios')
-      .update({ nombre, duracion_min: duracionMin, precio, anticipo })
+      .update({ nombre, descripcion: descripcion || null, duracion_min: duracionMin, precio, anticipo })
       .eq('id', id);
     if (error) {
       mensaje.textContent = 'No se pudo guardar: ' + error.message;
