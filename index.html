@@ -288,6 +288,10 @@
       await cargarVistaCalendario();
       return;
     }
+    if (vistaActual === 'recursos') {
+      await cargarVistaRecursos();
+      return;
+    }
 
     contenido.className = 'cargando';
     contenido.textContent = 'Cargando...';
@@ -331,19 +335,6 @@
             <td>${c.consentimiento ? 'Sí' : 'No'}</td>
             <td>${formatearFecha(c.creado_en)}</td>
           `
-        );
-      } else if (vistaActual === 'recursos') {
-        const { data, error } = await cliente
-          .from('recursos')
-          .select('id, nombre, creado_en')
-          .eq('negocio_id', negocioActual)
-          .order('nombre');
-        if (error) throw error;
-
-        contenido.innerHTML = tabla(
-          ['Nombre', 'Creado'],
-          data,
-          (r) => `<td>${r.nombre}</td><td>${formatearFecha(r.creado_en)}</td>`
         );
       } else if (vistaActual === 'servicios') {
         const { data, error } = await cliente
@@ -690,6 +681,155 @@
     document.querySelectorAll('.dia-calendario[data-fecha]').forEach((celda) => {
       celda.addEventListener('click', () => alternarDia(celda.dataset.fecha, celda.dataset.bloqueoId || null));
     });
+  }
+
+  // --- Recursos (alta, renombrar, eliminar) ---
+
+  async function cargarVistaRecursos() {
+    contenido.className = 'cargando';
+    contenido.textContent = 'Cargando...';
+
+    const { data: recursos, error } = await cliente
+      .from('recursos')
+      .select('id, nombre, creado_en')
+      .eq('negocio_id', negocioActual)
+      .order('nombre');
+    if (error) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo cargar: ' + error.message;
+      return;
+    }
+
+    contenido.className = '';
+    contenido.innerHTML = `
+      <div style="display:flex; gap:8px; margin-bottom:12px;">
+        <input type="text" id="nombreNuevoRecurso" placeholder="Nombre del nuevo recurso" />
+        <button id="botonAgregarRecurso">Agregar recurso</button>
+      </div>
+      <div id="mensajeRecursos" style="font-size:13px; margin-bottom:12px;"></div>
+      ${recursos.length === 0 ? '<div class="vacio">Todavía no hay recursos.</div>' : `
+        <table>
+          <thead><tr><th>Nombre</th><th>Creado</th><th></th></tr></thead>
+          <tbody>
+            ${recursos.map((r) => `
+              <tr data-id="${r.id}">
+                <td>
+                  <span class="texto-nombre">${r.nombre}</span>
+                  <input type="text" class="input-nombre" value="${r.nombre}" style="display:none;" />
+                </td>
+                <td>${formatearFecha(r.creado_en)}</td>
+                <td style="white-space:nowrap;">
+                  <button type="button" class="secundario boton-renombrar">Renombrar</button>
+                  <button type="button" class="secundario boton-guardar-nombre" style="display:none;">Guardar</button>
+                  <button type="button" class="secundario boton-eliminar-recurso">Eliminar</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `}
+    `;
+
+    document.getElementById('botonAgregarRecurso').addEventListener('click', agregarRecurso);
+
+    document.querySelectorAll('tr[data-id]').forEach((fila) => {
+      const id = fila.dataset.id;
+      const spanNombre = fila.querySelector('.texto-nombre');
+      const inputNombre = fila.querySelector('.input-nombre');
+      const botonRenombrar = fila.querySelector('.boton-renombrar');
+      const botonGuardar = fila.querySelector('.boton-guardar-nombre');
+      const botonEliminar = fila.querySelector('.boton-eliminar-recurso');
+
+      botonRenombrar.addEventListener('click', () => {
+        spanNombre.style.display = 'none';
+        inputNombre.style.display = '';
+        botonRenombrar.style.display = 'none';
+        botonGuardar.style.display = '';
+        inputNombre.focus();
+      });
+
+      botonGuardar.addEventListener('click', () => renombrarRecurso(id, inputNombre.value));
+      botonEliminar.addEventListener('click', () => eliminarRecurso(id, spanNombre.textContent));
+    });
+  }
+
+  async function agregarRecurso() {
+    const mensaje = document.getElementById('mensajeRecursos');
+    const input = document.getElementById('nombreNuevoRecurso');
+    const nombre = input.value.trim();
+
+    if (!nombre) {
+      mensaje.textContent = 'Escribe un nombre para el recurso.';
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+
+    mensaje.textContent = 'Guardando...';
+    mensaje.style.color = 'var(--texto-suave)';
+
+    const { error } = await cliente.from('recursos').insert({ negocio_id: negocioActual, nombre });
+    if (error) {
+      mensaje.textContent = 'No se pudo agregar: ' + error.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    await cargarVistaRecursos();
+  }
+
+  async function renombrarRecurso(id, nuevoNombre) {
+    const mensaje = document.getElementById('mensajeRecursos');
+    const nombre = nuevoNombre.trim();
+
+    if (!nombre) {
+      mensaje.textContent = 'El nombre no puede quedar vacío.';
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+
+    const { error } = await cliente.from('recursos').update({ nombre }).eq('id', id);
+    if (error) {
+      mensaje.textContent = 'No se pudo renombrar: ' + error.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    await cargarVistaRecursos();
+  }
+
+  async function eliminarRecurso(id, nombre) {
+    const mensaje = document.getElementById('mensajeRecursos');
+    mensaje.textContent = 'Verificando...';
+    mensaje.style.color = 'var(--texto-suave)';
+
+    // La tabla recursos tiene "on delete cascade" hacia citas: borrar un
+    // recurso con citas asociadas las borraría también, sin poder
+    // deshacerse. Se revisa antes de dejar continuar.
+    const { count, error: errConteo } = await cliente
+      .from('citas')
+      .select('id', { count: 'exact', head: true })
+      .eq('recurso_id', id);
+    if (errConteo) {
+      mensaje.textContent = 'No se pudo verificar: ' + errConteo.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    if (count > 0) {
+      mensaje.textContent = `"${nombre}" tiene ${count} cita(s) asociada(s). No se puede eliminar sin perder ese historial — cancela o reasigna esas citas primero.`;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+
+    if (!confirm(`¿Eliminar el recurso "${nombre}"? Esta acción no se puede deshacer.`)) {
+      mensaje.textContent = '';
+      return;
+    }
+
+    const { error } = await cliente.from('recursos').delete().eq('id', id);
+    if (error) {
+      mensaje.textContent = 'No se pudo eliminar: ' + error.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    await cargarVistaRecursos();
   }
 
   async function alternarDia(fechaStr, bloqueoId) {
