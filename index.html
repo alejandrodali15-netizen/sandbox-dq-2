@@ -112,6 +112,7 @@
       <button data-vista="clientes">Clientes</button>
       <button data-vista="recursos">Recursos</button>
       <button data-vista="servicios">Servicios</button>
+      <button data-vista="horarios">Horarios</button>
     </nav>
 
     <section class="panel">
@@ -128,8 +129,9 @@
   // exponer, porque todo lo que puede hacer está limitado por las políticas
   // de RLS (rls-panel-auth.sql), no por mantenerla en secreto.
   // ---------------------------------------------------------------------
-  const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
+   const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_NapnUGy_NJ061jKYtWRYuw_x-_vR-Yp';
+
 
   const { createClient } = supabase;
   const cliente = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -141,6 +143,8 @@
 
   let negocioActual = null;
   let vistaActual = 'citas';
+  let recursoActualHorarios = null;
+  const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
   formLogin.addEventListener('submit', async (evento) => {
     evento.preventDefault();
@@ -237,6 +241,13 @@
       return;
     }
 
+    if (vistaActual === 'horarios') {
+      // Vista con su propio manejo de carga/errores (tiene formulario e
+      // interacción propia), así que no pasa por el flujo genérico de abajo.
+      await cargarVistaHorarios();
+      return;
+    }
+
     contenido.className = 'cargando';
     contenido.textContent = 'Cargando...';
 
@@ -316,6 +327,143 @@
       contenido.className = 'error';
       contenido.textContent = 'No se pudo cargar: ' + err.message;
     }
+  }
+
+  // --- Horarios y días de atención (lectura + escritura) ---
+
+  async function cargarVistaHorarios() {
+    contenido.className = 'cargando';
+    contenido.textContent = 'Cargando...';
+
+    const { data: recursos, error: errRecursos } = await cliente
+      .from('recursos')
+      .select('id, nombre')
+      .eq('negocio_id', negocioActual)
+      .order('nombre');
+    if (errRecursos) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo cargar: ' + errRecursos.message;
+      return;
+    }
+    if (recursos.length === 0) {
+      contenido.className = 'vacio';
+      contenido.textContent = 'Este negocio no tiene recursos todavía.';
+      return;
+    }
+
+    if (!recursoActualHorarios || !recursos.some((r) => r.id === recursoActualHorarios)) {
+      recursoActualHorarios = recursos[0].id;
+    }
+
+    const { data: horarios, error: errHorarios } = await cliente
+      .from('horarios_laborales')
+      .select('*')
+      .eq('recurso_id', recursoActualHorarios);
+    if (errHorarios) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo cargar: ' + errHorarios.message;
+      return;
+    }
+
+    const porDia = {};
+    horarios.forEach((h) => { porDia[h.dia_semana] = h; });
+
+    contenido.className = '';
+    contenido.innerHTML = `
+      <div style="margin-bottom:16px;">
+        <label>Recurso: </label>
+        <select id="selectorRecursoHorarios">
+          ${recursos.map((r) => `<option value="${r.id}" ${r.id === recursoActualHorarios ? 'selected' : ''}>${r.nombre}</option>`).join('')}
+        </select>
+      </div>
+      <div id="filasHorarios">
+        ${DIAS_SEMANA.map((nombreDia, i) => {
+          const existente = porDia[i];
+          return `
+            <div class="fila-horario" data-dia="${i}" style="display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px solid var(--gris-borde);">
+              <label style="width:120px;"><input type="checkbox" class="chk-abierto" ${existente ? 'checked' : ''} /> ${nombreDia}</label>
+              <input type="time" class="hora-inicio" value="${existente ? existente.hora_inicio.slice(0, 5) : '09:00'}" ${existente ? '' : 'disabled'} />
+              <span>a</span>
+              <input type="time" class="hora-fin" value="${existente ? existente.hora_fin.slice(0, 5) : '18:00'}" ${existente ? '' : 'disabled'} />
+            </div>
+          `;
+        }).join('')}
+      </div>
+      <div style="margin-top:16px; display:flex; align-items:center; gap:12px;">
+        <button id="botonGuardarHorarios">Guardar horarios</button>
+        <span id="mensajeHorarios" style="font-size:13px;"></span>
+      </div>
+    `;
+
+    document.getElementById('selectorRecursoHorarios').addEventListener('change', (e) => {
+      recursoActualHorarios = e.target.value;
+      cargarVistaHorarios();
+    });
+
+    document.querySelectorAll('.chk-abierto').forEach((chk) => {
+      chk.addEventListener('change', (e) => {
+        const fila = e.target.closest('.fila-horario');
+        const habilitar = e.target.checked;
+        fila.querySelector('.hora-inicio').disabled = !habilitar;
+        fila.querySelector('.hora-fin').disabled = !habilitar;
+      });
+    });
+
+    document.getElementById('botonGuardarHorarios').addEventListener('click', guardarHorarios);
+  }
+
+  async function guardarHorarios() {
+    const mensaje = document.getElementById('mensajeHorarios');
+    mensaje.textContent = 'Guardando...';
+    mensaje.style.color = 'var(--texto-suave)';
+
+    const filas = document.querySelectorAll('.fila-horario');
+    const nuevos = [];
+    for (const fila of filas) {
+      const abierto = fila.querySelector('.chk-abierto').checked;
+      if (!abierto) continue;
+
+      const dia = Number(fila.dataset.dia);
+      const horaInicio = fila.querySelector('.hora-inicio').value;
+      const horaFin = fila.querySelector('.hora-fin').value;
+
+      if (!horaInicio || !horaFin) {
+        mensaje.textContent = `Falta la hora en ${DIAS_SEMANA[dia]}.`;
+        mensaje.style.color = 'var(--rojo)';
+        return;
+      }
+      if (horaFin <= horaInicio) {
+        mensaje.textContent = `En ${DIAS_SEMANA[dia]}, la hora de cierre debe ser después de la de apertura.`;
+        mensaje.style.color = 'var(--rojo)';
+        return;
+      }
+      nuevos.push({ recurso_id: recursoActualHorarios, dia_semana: dia, hora_inicio: horaInicio, hora_fin: horaFin });
+    }
+
+    // Reemplaza todo el horario del recurso: borra lo que había y mete lo
+    // nuevo. Es más simple y menos propenso a errores que tratar de calcular
+    // qué cambió fila por fila.
+    const { error: errBorrar } = await cliente
+      .from('horarios_laborales')
+      .delete()
+      .eq('recurso_id', recursoActualHorarios);
+    if (errBorrar) {
+      mensaje.textContent = 'No se pudo guardar: ' + errBorrar.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+
+    if (nuevos.length > 0) {
+      const { error: errInsertar } = await cliente.from('horarios_laborales').insert(nuevos);
+      if (errInsertar) {
+        mensaje.textContent = 'No se pudo guardar (tus horarios anteriores ya se borraron, vuelve a intentar): ' + errInsertar.message;
+        mensaje.style.color = 'var(--rojo)';
+        return;
+      }
+    }
+
+    mensaje.textContent = 'Guardado.';
+    mensaje.style.color = 'var(--verde)';
   }
 </script>
 
