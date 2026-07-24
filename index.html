@@ -166,8 +166,9 @@
   // exponer, porque todo lo que puede hacer está limitado por las políticas
   // de RLS (rls-panel-auth.sql), no por mantenerla en secreto.
   // ---------------------------------------------------------------------
-  const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
+    const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_NapnUGy_NJ061jKYtWRYuw_x-_vR-Yp';
+
 
   const { createClient } = supabase;
   const cliente = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -288,6 +289,10 @@
       await cargarVistaCalendario();
       return;
     }
+    if (vistaActual === 'clientes') {
+      await cargarVistaClientes();
+      return;
+    }
     if (vistaActual === 'recursos') {
       await cargarVistaRecursos();
       return;
@@ -320,24 +325,6 @@
             <td>${c.clientes?.nombre ?? '—'}</td>
             <td>${c.clientes?.telefono ?? '—'}</td>
             <td>${badgeEstado(c.estado)}</td>
-          `
-        );
-      } else if (vistaActual === 'clientes') {
-        const { data, error } = await cliente
-          .from('clientes')
-          .select('id, nombre, telefono, consentimiento, creado_en')
-          .eq('negocio_id', negocioActual)
-          .order('creado_en', { ascending: false });
-        if (error) throw error;
-
-        contenido.innerHTML = tabla(
-          ['Nombre', 'Teléfono', 'Consentimiento', 'Creado'],
-          data,
-          (c) => `
-            <td>${c.nombre ?? '—'}</td>
-            <td>${c.telefono}</td>
-            <td>${c.consentimiento ? 'Sí' : 'No'}</td>
-            <td>${formatearFecha(c.creado_en)}</td>
           `
         );
       }
@@ -667,6 +654,122 @@
     document.querySelectorAll('.dia-calendario[data-fecha]').forEach((celda) => {
       celda.addEventListener('click', () => alternarDia(celda.dataset.fecha, celda.dataset.bloqueoId || null));
     });
+  }
+
+  // --- Clientes (editar seudónimo, correo, notas) ---
+  //
+  // El número de cliente (numero_cliente) lo asigna solo un trigger en la
+  // base de datos apenas se crea el cliente (ver schema.sql) — nunca se
+  // manda desde aquí, por eso no aparece en el formulario de edición.
+  // Nombre y teléfono tampoco son editables desde esta pestaña: el teléfono
+  // es la llave que usa el bot para reconocer al cliente, cambiarlo desde
+  // aquí sin coordinarlo sería confuso.
+
+  async function cargarVistaClientes() {
+    contenido.className = 'cargando';
+    contenido.textContent = 'Cargando...';
+
+    const { data: clientes, error } = await cliente
+      .from('clientes')
+      .select('id, numero_cliente, nombre, telefono, seudonimo, correo, notas, consentimiento, creado_en')
+      .eq('negocio_id', negocioActual)
+      .order('numero_cliente', { ascending: true });
+    if (error) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo cargar: ' + error.message;
+      return;
+    }
+
+    contenido.className = '';
+    contenido.innerHTML = `
+      <div id="mensajeClientes" style="font-size:13px; margin-bottom:12px;"></div>
+      ${clientes.length === 0 ? '<div class="vacio">No hay nada que mostrar todavía.</div>' : `
+        <table>
+          <thead><tr>
+            <th>#</th><th>Nombre</th><th>Seudónimo</th><th>Teléfono</th><th>Correo</th><th>Notas</th><th>Consentimiento</th><th>Creado</th><th></th>
+          </tr></thead>
+          <tbody>
+            ${clientes.map((c) => `
+              <tr data-id="${c.id}">
+                <td>${c.numero_cliente ?? '—'}</td>
+                <td>${c.nombre ?? '—'}</td>
+                <td>
+                  <span class="texto-seudonimo">${c.seudonimo ?? '—'}</span>
+                  <input type="text" class="input-seudonimo" value="${c.seudonimo ?? ''}" style="display:none; width:110px;" />
+                </td>
+                <td>${c.telefono}</td>
+                <td>
+                  <span class="texto-correo">${c.correo ?? '—'}</span>
+                  <input type="email" class="input-correo" value="${c.correo ?? ''}" style="display:none; width:170px;" />
+                </td>
+                <td>
+                  <span class="texto-notas">${c.notas ?? '—'}</span>
+                  <input type="text" class="input-notas" value="${c.notas ?? ''}" style="display:none; width:180px;" />
+                </td>
+                <td>${c.consentimiento ? 'Sí' : 'No'}</td>
+                <td>${formatearFecha(c.creado_en)}</td>
+                <td style="white-space:nowrap;">
+                  <button type="button" class="secundario boton-editar-cliente">Editar</button>
+                  <button type="button" class="secundario boton-guardar-cliente" style="display:none;">Guardar</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `}
+    `;
+
+    document.querySelectorAll('tr[data-id]').forEach((fila) => {
+      const id = fila.dataset.id;
+      const campos = ['seudonimo', 'correo', 'notas'].map((campo) => ({
+        campo,
+        span: fila.querySelector(`.texto-${campo}`),
+        input: fila.querySelector(`.input-${campo}`),
+      }));
+      const botonEditar = fila.querySelector('.boton-editar-cliente');
+      const botonGuardar = fila.querySelector('.boton-guardar-cliente');
+
+      botonEditar.addEventListener('click', () => {
+        campos.forEach(({ span, input }) => {
+          span.style.display = 'none';
+          input.style.display = '';
+        });
+        botonEditar.style.display = 'none';
+        botonGuardar.style.display = '';
+      });
+
+      botonGuardar.addEventListener('click', () => {
+        const [seudonimoEl, correoEl, notasEl] = campos.map((c) => c.input);
+        editarCliente(id, { seudonimo: seudonimoEl.value, correo: correoEl.value, notas: notasEl.value });
+      });
+    });
+  }
+
+  async function editarCliente(id, valores) {
+    const mensaje = document.getElementById('mensajeClientes');
+    const seudonimo = valores.seudonimo.trim();
+    const correo = valores.correo.trim();
+    const notas = valores.notas.trim();
+
+    if (correo && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo)) {
+      mensaje.textContent = 'Ese correo no parece válido.';
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+
+    mensaje.textContent = 'Guardando...';
+    mensaje.style.color = 'var(--texto-suave)';
+
+    const { error } = await cliente
+      .from('clientes')
+      .update({ seudonimo: seudonimo || null, correo: correo || null, notas: notas || null })
+      .eq('id', id);
+    if (error) {
+      mensaje.textContent = 'No se pudo guardar: ' + error.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    await cargarVistaClientes();
   }
 
   // --- Servicios (alta, editar, eliminar) ---
