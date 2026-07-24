@@ -292,6 +292,10 @@
       await cargarVistaRecursos();
       return;
     }
+    if (vistaActual === 'servicios') {
+      await cargarVistaServicios();
+      return;
+    }
 
     contenido.className = 'cargando';
     contenido.textContent = 'Cargando...';
@@ -334,24 +338,6 @@
             <td>${c.telefono}</td>
             <td>${c.consentimiento ? 'Sí' : 'No'}</td>
             <td>${formatearFecha(c.creado_en)}</td>
-          `
-        );
-      } else if (vistaActual === 'servicios') {
-        const { data, error } = await cliente
-          .from('servicios')
-          .select('id, nombre, duracion_min, precio, anticipo')
-          .eq('negocio_id', negocioActual)
-          .order('nombre');
-        if (error) throw error;
-
-        contenido.innerHTML = tabla(
-          ['Nombre', 'Duración (min)', 'Precio', 'Anticipo'],
-          data,
-          (s) => `
-            <td>${s.nombre}</td>
-            <td>${s.duracion_min}</td>
-            <td>$${Number(s.precio).toFixed(2)}</td>
-            <td>$${Number(s.anticipo).toFixed(2)}</td>
           `
         );
       }
@@ -681,6 +667,221 @@
     document.querySelectorAll('.dia-calendario[data-fecha]').forEach((celda) => {
       celda.addEventListener('click', () => alternarDia(celda.dataset.fecha, celda.dataset.bloqueoId || null));
     });
+  }
+
+  // --- Servicios (alta, editar, eliminar) ---
+  //
+  // Aquí es donde se define cuánto dura cada tipo de cita (duracion_min):
+  // el motor (disponibilidad.js) usa ese número para calcular los horarios
+  // disponibles. Horarios (la otra pestaña) solo dice qué días/horas
+  // atiende cada recurso — cosas distintas a propósito.
+
+  async function cargarVistaServicios() {
+    contenido.className = 'cargando';
+    contenido.textContent = 'Cargando...';
+
+    const { data: servicios, error } = await cliente
+      .from('servicios')
+      .select('id, nombre, duracion_min, precio, anticipo')
+      .eq('negocio_id', negocioActual)
+      .order('nombre');
+    if (error) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo cargar: ' + error.message;
+      return;
+    }
+
+    contenido.className = '';
+    contenido.innerHTML = `
+      <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; align-items:center;">
+        <input type="text" id="nombreNuevoServicio" placeholder="Nombre del servicio" style="width:180px;" />
+        <input type="number" id="duracionNuevoServicio" placeholder="Duración (min)" min="1" style="width:130px;" />
+        <input type="number" id="precioNuevoServicio" placeholder="Precio" min="0" step="0.01" style="width:110px;" />
+        <input type="number" id="anticipoNuevoServicio" placeholder="Anticipo" min="0" step="0.01" style="width:110px;" />
+        <button id="botonAgregarServicio">Agregar servicio</button>
+      </div>
+      <div id="mensajeServicios" style="font-size:13px; margin-bottom:12px;"></div>
+      ${servicios.length === 0 ? '<div class="vacio">Todavía no hay servicios.</div>' : `
+        <table>
+          <thead><tr><th>Nombre</th><th>Duración (min)</th><th>Precio</th><th>Anticipo</th><th></th></tr></thead>
+          <tbody>
+            ${servicios.map((s) => `
+              <tr data-id="${s.id}">
+                <td>
+                  <span class="texto-nombre">${s.nombre}</span>
+                  <input type="text" class="input-nombre" value="${s.nombre}" style="display:none; width:140px;" />
+                </td>
+                <td>
+                  <span class="texto-duracion">${s.duracion_min}</span>
+                  <input type="number" class="input-duracion" value="${s.duracion_min}" min="1" style="display:none; width:90px;" />
+                </td>
+                <td>
+                  <span class="texto-precio">$${Number(s.precio).toFixed(2)}</span>
+                  <input type="number" class="input-precio" value="${s.precio}" min="0" step="0.01" style="display:none; width:90px;" />
+                </td>
+                <td>
+                  <span class="texto-anticipo">$${Number(s.anticipo).toFixed(2)}</span>
+                  <input type="number" class="input-anticipo" value="${s.anticipo}" min="0" step="0.01" style="display:none; width:90px;" />
+                </td>
+                <td style="white-space:nowrap;">
+                  <button type="button" class="secundario boton-editar-servicio">Editar</button>
+                  <button type="button" class="secundario boton-guardar-servicio" style="display:none;">Guardar</button>
+                  <button type="button" class="secundario boton-eliminar-servicio">Eliminar</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      `}
+    `;
+
+    document.getElementById('botonAgregarServicio').addEventListener('click', agregarServicio);
+
+    document.querySelectorAll('tr[data-id]').forEach((fila) => {
+      const id = fila.dataset.id;
+      const campos = ['nombre', 'duracion', 'precio', 'anticipo'].map((campo) => ({
+        campo,
+        span: fila.querySelector(`.texto-${campo}`),
+        input: fila.querySelector(`.input-${campo}`),
+      }));
+      const botonEditar = fila.querySelector('.boton-editar-servicio');
+      const botonGuardar = fila.querySelector('.boton-guardar-servicio');
+      const botonEliminar = fila.querySelector('.boton-eliminar-servicio');
+
+      botonEditar.addEventListener('click', () => {
+        campos.forEach(({ span, input }) => {
+          span.style.display = 'none';
+          input.style.display = '';
+        });
+        botonEditar.style.display = 'none';
+        botonGuardar.style.display = '';
+      });
+
+      botonGuardar.addEventListener('click', () => {
+        const [nombreEl, duracionEl, precioEl, anticipoEl] = campos.map((c) => c.input);
+        editarServicio(id, {
+          nombre: nombreEl.value,
+          duracionMin: duracionEl.value,
+          precio: precioEl.value,
+          anticipo: anticipoEl.value,
+        });
+      });
+
+      botonEliminar.addEventListener('click', () => eliminarServicio(id, campos[0].span.textContent));
+    });
+  }
+
+  async function agregarServicio() {
+    const mensaje = document.getElementById('mensajeServicios');
+    const nombre = document.getElementById('nombreNuevoServicio').value.trim();
+    const duracionMin = document.getElementById('duracionNuevoServicio').value;
+    const precio = document.getElementById('precioNuevoServicio').value || 0;
+    const anticipo = document.getElementById('anticipoNuevoServicio').value || 0;
+
+    if (!nombre) {
+      mensaje.textContent = 'Escribe un nombre para el servicio.';
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    if (!duracionMin || Number(duracionMin) <= 0) {
+      mensaje.textContent = 'La duración debe ser un número de minutos mayor a 0.';
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    if (Number(precio) < 0 || Number(anticipo) < 0) {
+      mensaje.textContent = 'El precio y el anticipo no pueden ser negativos.';
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+
+    mensaje.textContent = 'Guardando...';
+    mensaje.style.color = 'var(--texto-suave)';
+
+    const { error } = await cliente.from('servicios').insert({
+      negocio_id: negocioActual,
+      nombre,
+      duracion_min: Number(duracionMin),
+      precio: Number(precio),
+      anticipo: Number(anticipo),
+    });
+    if (error) {
+      mensaje.textContent = 'No se pudo agregar: ' + error.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    await cargarVistaServicios();
+  }
+
+  async function editarServicio(id, valores) {
+    const mensaje = document.getElementById('mensajeServicios');
+    const nombre = valores.nombre.trim();
+    const duracionMin = Number(valores.duracionMin);
+    const precio = Number(valores.precio);
+    const anticipo = Number(valores.anticipo);
+
+    if (!nombre) {
+      mensaje.textContent = 'El nombre no puede quedar vacío.';
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    if (!duracionMin || duracionMin <= 0) {
+      mensaje.textContent = 'La duración debe ser un número de minutos mayor a 0.';
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    if (precio < 0 || anticipo < 0) {
+      mensaje.textContent = 'El precio y el anticipo no pueden ser negativos.';
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+
+    const { error } = await cliente
+      .from('servicios')
+      .update({ nombre, duracion_min: duracionMin, precio, anticipo })
+      .eq('id', id);
+    if (error) {
+      mensaje.textContent = 'No se pudo guardar: ' + error.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    await cargarVistaServicios();
+  }
+
+  async function eliminarServicio(id, nombre) {
+    const mensaje = document.getElementById('mensajeServicios');
+    mensaje.textContent = 'Verificando...';
+    mensaje.style.color = 'var(--texto-suave)';
+
+    // A diferencia de recursos, servicio_id en "citas" no tiene cascada —
+    // Postgres rechazaría el borrado si hay citas. Se revisa antes para dar
+    // un mensaje claro en vez de un error crudo de base de datos.
+    const { count, error: errConteo } = await cliente
+      .from('citas')
+      .select('id', { count: 'exact', head: true })
+      .eq('servicio_id', id);
+    if (errConteo) {
+      mensaje.textContent = 'No se pudo verificar: ' + errConteo.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    if (count > 0) {
+      mensaje.textContent = `"${nombre}" tiene ${count} cita(s) asociada(s). No se puede eliminar sin perder ese historial — cancela o reasigna esas citas primero.`;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+
+    if (!confirm(`¿Eliminar el servicio "${nombre}"? Esta acción no se puede deshacer.`)) {
+      mensaje.textContent = '';
+      return;
+    }
+
+    const { error } = await cliente.from('servicios').delete().eq('id', id);
+    if (error) {
+      mensaje.textContent = 'No se pudo eliminar: ' + error.message;
+      mensaje.style.color = 'var(--rojo)';
+      return;
+    }
+    await cargarVistaServicios();
   }
 
   // --- Recursos (alta, renombrar, eliminar) ---
