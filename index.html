@@ -84,6 +84,36 @@
   }
   #pantallaLogin h1 { font-size: 18px; margin: 0 0 8px; }
   #pantallaLogin .errorLogin { color: var(--rojo); font-size: 13px; min-height: 18px; }
+
+  .grid-calendario {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 6px;
+  }
+  .encabezado-dia {
+    text-align: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    padding-bottom: 4px;
+  }
+  .dia-calendario, .dia-vacio {
+    border-radius: 8px;
+    padding: 8px 6px;
+    min-height: 56px;
+  }
+  .dia-vacio { background: transparent; }
+  .dia-calendario { border: 1px solid var(--gris-borde); }
+  .dia-calendario .numero-dia { font-weight: 600; font-size: 13px; }
+  .dia-calendario .etiqueta-dia { font-size: 11px; margin-top: 4px; }
+  .dia-abierto { background: #f0fdf4; }
+  .dia-abierto .etiqueta-dia { color: var(--verde); }
+  .dia-cerrado-manual { background: #fef2f2; cursor: pointer; }
+  .dia-cerrado-manual .etiqueta-dia { color: var(--rojo); }
+  .dia-abierto[data-fecha] { cursor: pointer; }
+  .dia-cerrado-defecto { background: #f9fafb; color: var(--texto-suave); }
+  .dia-cerrado-defecto .etiqueta-dia { color: var(--texto-suave); }
 </style>
 </head>
 <body>
@@ -113,6 +143,7 @@
       <button data-vista="recursos">Recursos</button>
       <button data-vista="servicios">Servicios</button>
       <button data-vista="horarios">Horarios</button>
+      <button data-vista="calendario">Calendario</button>
     </nav>
 
     <section class="panel">
@@ -129,7 +160,7 @@
   // exponer, porque todo lo que puede hacer está limitado por las políticas
   // de RLS (rls-panel-auth.sql), no por mantenerla en secreto.
   // ---------------------------------------------------------------------
-   const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
+    const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_NapnUGy_NJ061jKYtWRYuw_x-_vR-Yp';
 
 
@@ -143,7 +174,8 @@
 
   let negocioActual = null;
   let vistaActual = 'citas';
-  let recursoActualHorarios = null;
+  let recursoSeleccionado = null;
+  let mesCalendario = null; // Date al primer día del mes que se está mostrando
   const DIAS_SEMANA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
   formLogin.addEventListener('submit', async (evento) => {
@@ -245,6 +277,10 @@
       // Vista con su propio manejo de carga/errores (tiene formulario e
       // interacción propia), así que no pasa por el flujo genérico de abajo.
       await cargarVistaHorarios();
+      return;
+    }
+    if (vistaActual === 'calendario') {
+      await cargarVistaCalendario();
       return;
     }
 
@@ -351,14 +387,14 @@
       return;
     }
 
-    if (!recursoActualHorarios || !recursos.some((r) => r.id === recursoActualHorarios)) {
-      recursoActualHorarios = recursos[0].id;
+    if (!recursoSeleccionado || !recursos.some((r) => r.id === recursoSeleccionado)) {
+      recursoSeleccionado = recursos[0].id;
     }
 
     const { data: horarios, error: errHorarios } = await cliente
       .from('horarios_laborales')
       .select('*')
-      .eq('recurso_id', recursoActualHorarios);
+      .eq('recurso_id', recursoSeleccionado);
     if (errHorarios) {
       contenido.className = 'error';
       contenido.textContent = 'No se pudo cargar: ' + errHorarios.message;
@@ -373,7 +409,7 @@
       <div style="margin-bottom:16px;">
         <label>Recurso: </label>
         <select id="selectorRecursoHorarios">
-          ${recursos.map((r) => `<option value="${r.id}" ${r.id === recursoActualHorarios ? 'selected' : ''}>${r.nombre}</option>`).join('')}
+          ${recursos.map((r) => `<option value="${r.id}" ${r.id === recursoSeleccionado ? 'selected' : ''}>${r.nombre}</option>`).join('')}
         </select>
       </div>
       <div id="filasHorarios">
@@ -396,7 +432,7 @@
     `;
 
     document.getElementById('selectorRecursoHorarios').addEventListener('change', (e) => {
-      recursoActualHorarios = e.target.value;
+      recursoSeleccionado = e.target.value;
       cargarVistaHorarios();
     });
 
@@ -437,7 +473,7 @@
         mensaje.style.color = 'var(--rojo)';
         return;
       }
-      nuevos.push({ recurso_id: recursoActualHorarios, dia_semana: dia, hora_inicio: horaInicio, hora_fin: horaFin });
+      nuevos.push({ recurso_id: recursoSeleccionado, dia_semana: dia, hora_inicio: horaInicio, hora_fin: horaFin });
     }
 
     // Reemplaza todo el horario del recurso: borra lo que había y mete lo
@@ -446,7 +482,7 @@
     const { error: errBorrar } = await cliente
       .from('horarios_laborales')
       .delete()
-      .eq('recurso_id', recursoActualHorarios);
+      .eq('recurso_id', recursoSeleccionado);
     if (errBorrar) {
       mensaje.textContent = 'No se pudo guardar: ' + errBorrar.message;
       mensaje.style.color = 'var(--rojo)';
@@ -464,6 +500,176 @@
 
     mensaje.textContent = 'Guardado.';
     mensaje.style.color = 'var(--verde)';
+  }
+
+  // --- Calendario mensual de excepciones (días cerrados puntuales) ---
+  //
+  // El patrón semanal (pestaña Horarios) sigue siendo la regla general.
+  // Esta vista solo marca EXCEPCIONES de cierre sobre días que, por el
+  // patrón semanal, normalmente estarían abiertos — usando la tabla
+  // "bloqueos", que el motor (disponibilidad.js) ya respeta desde el
+  // principio. No abre días que el patrón semanal no contempla.
+
+  async function cargarVistaCalendario() {
+    contenido.className = 'cargando';
+    contenido.textContent = 'Cargando...';
+
+    const { data: recursos, error: errRecursos } = await cliente
+      .from('recursos')
+      .select('id, nombre')
+      .eq('negocio_id', negocioActual)
+      .order('nombre');
+    if (errRecursos) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo cargar: ' + errRecursos.message;
+      return;
+    }
+    if (recursos.length === 0) {
+      contenido.className = 'vacio';
+      contenido.textContent = 'Este negocio no tiene recursos todavía.';
+      return;
+    }
+
+    if (!recursoSeleccionado || !recursos.some((r) => r.id === recursoSeleccionado)) {
+      recursoSeleccionado = recursos[0].id;
+    }
+    if (!mesCalendario) {
+      const hoy = new Date();
+      mesCalendario = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+    }
+
+    const { data: horariosLaborales, error: errHorarios } = await cliente
+      .from('horarios_laborales')
+      .select('dia_semana')
+      .eq('recurso_id', recursoSeleccionado);
+    if (errHorarios) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo cargar: ' + errHorarios.message;
+      return;
+    }
+    const diasAbiertosPorDefecto = new Set(horariosLaborales.map((h) => h.dia_semana));
+
+    const inicioMes = new Date(mesCalendario.getFullYear(), mesCalendario.getMonth(), 1);
+    const finMes = new Date(mesCalendario.getFullYear(), mesCalendario.getMonth() + 1, 0);
+    const finMesExclusivo = new Date(mesCalendario.getFullYear(), mesCalendario.getMonth() + 1, 1);
+
+    const { data: bloqueos, error: errBloqueos } = await cliente
+      .from('bloqueos')
+      .select('id, inicio, fin')
+      .eq('recurso_id', recursoSeleccionado)
+      .lt('inicio', finMesExclusivo.toISOString())
+      .gt('fin', inicioMes.toISOString());
+    if (errBloqueos) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo cargar: ' + errBloqueos.message;
+      return;
+    }
+
+    const diasEnMes = finMes.getDate();
+    const primerDiaSemana = inicioMes.getDay();
+
+    let celdas = '';
+    for (let i = 0; i < primerDiaSemana; i++) celdas += '<div class="dia-vacio"></div>';
+
+    for (let dia = 1; dia <= diasEnMes; dia++) {
+      const fecha = new Date(mesCalendario.getFullYear(), mesCalendario.getMonth(), dia);
+      const diaSemana = fecha.getDay();
+      const inicioDia = fecha;
+      const finDia = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate() + 1);
+
+      const bloqueoDelDia = bloqueos.find(
+        (b) => new Date(b.inicio) < finDia && new Date(b.fin) > inicioDia
+      );
+      const abiertoPorDefecto = diasAbiertosPorDefecto.has(diaSemana);
+
+      let clase, etiqueta, atributos = '';
+      if (bloqueoDelDia) {
+        clase = 'dia-cerrado-manual';
+        etiqueta = 'Cerrado';
+        atributos = `data-fecha="${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}" data-bloqueo-id="${bloqueoDelDia.id}"`;
+      } else if (abiertoPorDefecto) {
+        clase = 'dia-abierto';
+        etiqueta = 'Abierto';
+        atributos = `data-fecha="${fecha.getFullYear()}-${String(fecha.getMonth() + 1).padStart(2, '0')}-${String(dia).padStart(2, '0')}"`;
+      } else {
+        clase = 'dia-cerrado-defecto';
+        etiqueta = '—';
+      }
+
+      celdas += `
+        <div class="dia-calendario ${clase}" ${atributos}>
+          <div class="numero-dia">${dia}</div>
+          <div class="etiqueta-dia">${etiqueta}</div>
+        </div>
+      `;
+    }
+
+    contenido.className = '';
+    contenido.innerHTML = `
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap;">
+        <label>Recurso: </label>
+        <select id="selectorRecursoCalendario">
+          ${recursos.map((r) => `<option value="${r.id}" ${r.id === recursoSeleccionado ? 'selected' : ''}>${r.nombre}</option>`).join('')}
+        </select>
+        <button id="botonMesAnterior" class="secundario">← Mes anterior</button>
+        <strong style="text-transform:capitalize;">${mesCalendario.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' })}</strong>
+        <button id="botonMesSiguiente" class="secundario">Mes siguiente →</button>
+      </div>
+      <div style="display:flex; gap:16px; margin-bottom:12px; font-size:12px; color:var(--texto-suave);">
+        <span>🟢 Abierto según horario semanal (clic para cerrar ese día)</span>
+        <span>🔴 Cerrado manualmente (clic para reabrir)</span>
+        <span>⚪ Sin horario semanal ese día</span>
+      </div>
+      <div class="grid-calendario">
+        ${['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map((d) => `<div class="encabezado-dia">${d}</div>`).join('')}
+        ${celdas}
+      </div>
+      <div id="mensajeCalendario" style="margin-top:12px; font-size:13px;"></div>
+    `;
+
+    document.getElementById('selectorRecursoCalendario').addEventListener('change', (e) => {
+      recursoSeleccionado = e.target.value;
+      cargarVistaCalendario();
+    });
+    document.getElementById('botonMesAnterior').addEventListener('click', () => {
+      mesCalendario = new Date(mesCalendario.getFullYear(), mesCalendario.getMonth() - 1, 1);
+      cargarVistaCalendario();
+    });
+    document.getElementById('botonMesSiguiente').addEventListener('click', () => {
+      mesCalendario = new Date(mesCalendario.getFullYear(), mesCalendario.getMonth() + 1, 1);
+      cargarVistaCalendario();
+    });
+    document.querySelectorAll('.dia-calendario[data-fecha]').forEach((celda) => {
+      celda.addEventListener('click', () => alternarDia(celda.dataset.fecha, celda.dataset.bloqueoId || null));
+    });
+  }
+
+  async function alternarDia(fechaStr, bloqueoId) {
+    const mensaje = document.getElementById('mensajeCalendario');
+    mensaje.textContent = 'Guardando...';
+    mensaje.style.color = 'var(--texto-suave)';
+
+    try {
+      if (bloqueoId) {
+        const { error } = await cliente.from('bloqueos').delete().eq('id', bloqueoId);
+        if (error) throw error;
+      } else {
+        const [anio, mesNum, dia] = fechaStr.split('-').map(Number);
+        const inicio = new Date(anio, mesNum - 1, dia);
+        const fin = new Date(anio, mesNum - 1, dia + 1);
+        const { error } = await cliente.from('bloqueos').insert({
+          recurso_id: recursoSeleccionado,
+          inicio: inicio.toISOString(),
+          fin: fin.toISOString(),
+          motivo: 'Cerrado manualmente desde el panel',
+        });
+        if (error) throw error;
+      }
+      await cargarVistaCalendario();
+    } catch (err) {
+      mensaje.textContent = 'No se pudo guardar: ' + err.message;
+      mensaje.style.color = 'var(--rojo)';
+    }
   }
 </script>
 
