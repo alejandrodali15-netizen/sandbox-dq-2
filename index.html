@@ -63,6 +63,18 @@
   .estado-cancelada { background: #fee2e2; color: var(--rojo); }
   .estado-completada { background: #e0e7ff; color: #4338ca; }
   .estado-no_asistio { background: #f3f4f6; color: var(--texto-suave); }
+
+  select.selector-estado {
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: none;
+  }
+  select.selector-estado.estado-pendiente { background: #fef3c7; color: var(--amarillo); }
+  select.selector-estado.estado-confirmada { background: #dcfce7; color: var(--verde); }
+  select.selector-estado.estado-cancelada { background: #fee2e2; color: var(--rojo); }
+  select.selector-estado.estado-completada { background: #e0e7ff; color: #4338ca; }
+  select.selector-estado.estado-no_asistio { background: #f3f4f6; color: var(--texto-suave); }
   .vacio, .cargando, .error { padding: 32px 8px; text-align: center; color: var(--texto-suave); }
   .error { color: var(--rojo); }
 
@@ -166,9 +178,8 @@
   // exponer, porque todo lo que puede hacer está limitado por las políticas
   // de RLS (rls-panel-auth.sql), no por mantenerla en secreto.
   // ---------------------------------------------------------------------
-    const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
+  const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
   const SUPABASE_ANON_KEY = 'sb_publishable_NapnUGy_NJ061jKYtWRYuw_x-_vR-Yp';
-
 
   const { createClient } = supabase;
   const cliente = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -243,10 +254,6 @@
     return new Date(iso).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
   }
 
-  function badgeEstado(estado) {
-    return `<span class="estado estado-${estado}">${estado}</span>`;
-  }
-
   function tabla(columnas, filas, celda) {
     if (filas.length === 0) return '<div class="vacio">No hay nada que mostrar todavía.</div>';
     const encabezado = columnas.map((c) => `<th>${c}</th>`).join('');
@@ -301,37 +308,106 @@
       await cargarVistaServicios();
       return;
     }
+    if (vistaActual === 'citas') {
+      await cargarVistaCitas();
+      return;
+    }
+  }
 
+  const ESTADOS_CITA = ['pendiente', 'confirmada', 'cancelada', 'completada', 'no_asistio'];
+
+  // --- Citas (cambiar estado) ---
+  //
+  // Crear una cita nueva o moverla de horario SIEMPRE debe pasar por
+  // reservarCita()/reprogramarCita() en citas.js — ésas sí revalidan
+  // disponibilidad antes de guardar. Cambiar solo el ESTADO de una cita que
+  // ya existe es distinto: citas.js tampoco hace nada especial para eso más
+  // que un UPDATE (cancelarCita, por ejemplo, no revisa disponibilidad, solo
+  // marca el estado). La restricción "sin_traslapes" de la base de datos
+  // sigue protegiendo cualquier UPDATE, venga de aquí o del motor — por eso
+  // esta pestaña puede escribir el estado directo, sin duplicar el motor.
+
+  async function cargarVistaCitas() {
     contenido.className = 'cargando';
     contenido.textContent = 'Cargando...';
 
-    try {
-      if (vistaActual === 'citas') {
-        const { data, error } = await cliente
-          .from('citas')
-          .select('id, inicio, fin, estado, motivo_cancelacion, recursos(nombre), servicios(nombre, precio), clientes(nombre, telefono)')
-          .eq('negocio_id', negocioActual)
-          .order('inicio', { ascending: true });
-        if (error) throw error;
-
-        contenido.innerHTML = tabla(
-          ['Inicio', 'Fin', 'Servicio', 'Recurso', 'Cliente', 'Teléfono', 'Estado'],
-          data,
-          (c) => `
-            <td>${formatearFecha(c.inicio)}</td>
-            <td>${formatearFecha(c.fin)}</td>
-            <td>${c.servicios?.nombre ?? '—'}</td>
-            <td>${c.recursos?.nombre ?? '—'}</td>
-            <td>${c.clientes?.nombre ?? '—'}</td>
-            <td>${c.clientes?.telefono ?? '—'}</td>
-            <td>${badgeEstado(c.estado)}</td>
-          `
-        );
-      }
-    } catch (err) {
+    const { data: citas, error } = await cliente
+      .from('citas')
+      .select('id, inicio, fin, estado, motivo_cancelacion, recursos(nombre), servicios(nombre, precio), clientes(nombre, telefono)')
+      .eq('negocio_id', negocioActual)
+      .order('inicio', { ascending: true });
+    if (error) {
       contenido.className = 'error';
-      contenido.textContent = 'No se pudo cargar: ' + err.message;
+      contenido.textContent = 'No se pudo cargar: ' + error.message;
+      return;
     }
+
+    contenido.className = '';
+    contenido.innerHTML = `
+      <div id="mensajeCitas" style="font-size:13px; margin-bottom:12px;"></div>
+      ${tabla(
+        ['Inicio', 'Fin', 'Servicio', 'Recurso', 'Cliente', 'Teléfono', 'Estado'],
+        citas,
+        (c) => `
+          <td>${formatearFecha(c.inicio)}</td>
+          <td>${formatearFecha(c.fin)}</td>
+          <td>${c.servicios?.nombre ?? '—'}</td>
+          <td>${c.recursos?.nombre ?? '—'}</td>
+          <td>${c.clientes?.nombre ?? '—'}</td>
+          <td>${c.clientes?.telefono ?? '—'}</td>
+          <td>
+            <select class="selector-estado estado-${c.estado}" data-id="${c.id}">
+              ${ESTADOS_CITA.map((e) => `<option value="${e}" ${e === c.estado ? 'selected' : ''}>${e}</option>`).join('')}
+            </select>
+          </td>
+        `
+      )}
+    `;
+
+    document.querySelectorAll('.selector-estado').forEach((selector) => {
+      selector.dataset.anterior = selector.value;
+      selector.addEventListener('change', () => cambiarEstadoCita(selector));
+    });
+  }
+
+  async function cambiarEstadoCita(selector) {
+    const mensaje = document.getElementById('mensajeCitas');
+    const id = selector.dataset.id;
+    const estadoAnterior = selector.dataset.anterior;
+    const nuevoEstado = selector.value;
+
+    let motivo = null;
+    if (nuevoEstado === 'cancelada') {
+      motivo = prompt('Motivo de la cancelación (opcional, puedes dejarlo en blanco):', '');
+      if (motivo === null) {
+        // Le dieron "Cancelar" al cuadro de texto, no a la cita: no se guarda nada.
+        selector.value = estadoAnterior;
+        return;
+      }
+    }
+
+    mensaje.textContent = 'Guardando...';
+    mensaje.style.color = 'var(--texto-suave)';
+
+    const cambios = { estado: nuevoEstado };
+    if (nuevoEstado === 'cancelada') cambios.motivo_cancelacion = motivo || null;
+
+    const { error } = await cliente.from('citas').update(cambios).eq('id', id);
+    if (error) {
+      if (error.code === '23P01') {
+        mensaje.textContent = 'No se pudo cambiar: ese horario ya lo ocupa otra cita activa (posiblemente se agendó algo ahí después de cancelar ésta).';
+      } else {
+        mensaje.textContent = 'No se pudo guardar: ' + error.message;
+      }
+      mensaje.style.color = 'var(--rojo)';
+      selector.value = estadoAnterior;
+      return;
+    }
+
+    selector.className = `selector-estado estado-${nuevoEstado}`;
+    selector.dataset.anterior = nuevoEstado;
+    mensaje.textContent = 'Guardado.';
+    mensaje.style.color = 'var(--verde)';
   }
 
   // --- Horarios y días de atención (lectura + escritura) ---
