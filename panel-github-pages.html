@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Panel — Motor de citas</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  :root {
+    --gris-fondo: #f5f6f8;
+    --gris-borde: #e2e4e8;
+    --texto: #1f2430;
+    --texto-suave: #6b7280;
+    --azul: #2563eb;
+    --verde: #16a34a;
+    --rojo: #dc2626;
+    --amarillo: #ca8a04;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--gris-fondo);
+    color: var(--texto);
+  }
+  header {
+    background: white;
+    border-bottom: 1px solid var(--gris-borde);
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; margin-right: auto; }
+  select, button, input {
+    font-size: 14px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--gris-borde);
+    background: white;
+  }
+  button { cursor: pointer; background: var(--azul); color: white; border: none; }
+  button:hover { opacity: 0.9; }
+  button.secundario { background: white; color: var(--texto); border: 1px solid var(--gris-borde); }
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  nav.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+  nav.tabs button { background: white; color: var(--texto); border: 1px solid var(--gris-borde); }
+  nav.tabs button.activa { background: var(--azul); color: white; border-color: var(--azul); }
+  section.panel {
+    background: white;
+    border: 1px solid var(--gris-borde);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--gris-borde); }
+  th { color: var(--texto-suave); font-weight: 600; font-size: 12px; text-transform: uppercase; }
+  tr:last-child td { border-bottom: none; }
+  .estado { display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .estado-pendiente { background: #fef3c7; color: var(--amarillo); }
+  .estado-confirmada { background: #dcfce7; color: var(--verde); }
+  .estado-cancelada { background: #fee2e2; color: var(--rojo); }
+  .estado-completada { background: #e0e7ff; color: #4338ca; }
+  .estado-no_asistio { background: #f3f4f6; color: var(--texto-suave); }
+  .vacio, .cargando, .error { padding: 32px 8px; text-align: center; color: var(--texto-suave); }
+  .error { color: var(--rojo); }
+
+  #pantallaLogin {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #pantallaLogin form {
+    background: white;
+    border: 1px solid var(--gris-borde);
+    border-radius: 10px;
+    padding: 32px;
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  #pantallaLogin h1 { font-size: 18px; margin: 0 0 8px; }
+  #pantallaLogin .errorLogin { color: var(--rojo); font-size: 13px; min-height: 18px; }
+</style>
+</head>
+<body>
+
+<div id="pantallaLogin">
+  <form id="formLogin">
+    <h1>Panel — Motor de citas</h1>
+    <input type="email" id="campoCorreo" placeholder="correo@ejemplo.com" required />
+    <input type="password" id="campoContrasena" placeholder="contraseña" required />
+    <button type="submit">Entrar</button>
+    <div class="errorLogin" id="errorLogin"></div>
+  </form>
+</div>
+
+<div id="pantallaPanel" style="display: none;">
+  <header>
+    <h1>Panel — Motor de citas</h1>
+    <select id="selectorNegocio"></select>
+    <button id="botonRefrescar">Refrescar</button>
+    <button id="botonSalir" class="secundario">Cerrar sesión</button>
+  </header>
+
+  <main>
+    <nav class="tabs">
+      <button data-vista="citas" class="activa">Citas</button>
+      <button data-vista="clientes">Clientes</button>
+      <button data-vista="recursos">Recursos</button>
+      <button data-vista="servicios">Servicios</button>
+    </nav>
+
+    <section class="panel">
+      <div id="contenido" class="cargando">Cargando...</div>
+    </section>
+  </main>
+</div>
+
+<script>
+  // ---------------------------------------------------------------------
+  // Rellena esto con los datos de TU proyecto de Supabase.
+  // La llave "anon" / "publishable" está hecha para vivir en código público
+  // como este — a diferencia de la service_role key, esta SÍ es segura de
+  // exponer, porque todo lo que puede hacer está limitado por las políticas
+  // de RLS (rls-panel-auth.sql), no por mantenerla en secreto.
+  // ---------------------------------------------------------------------
+  const SUPABASE_URL = 'https://hpkupabarylrqihateed.supabase.co';
+  const SUPABASE_ANON_KEY = 'sb_publishable_NapnUGy_NJ061jKYtWRYuw_x-_vR-Yp';
+
+  const { createClient } = supabase;
+  const cliente = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  const pantallaLogin = document.getElementById('pantallaLogin');
+  const pantallaPanel = document.getElementById('pantallaPanel');
+  const formLogin = document.getElementById('formLogin');
+  const errorLogin = document.getElementById('errorLogin');
+
+  let negocioActual = null;
+  let vistaActual = 'citas';
+
+  formLogin.addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    errorLogin.textContent = '';
+    const correo = document.getElementById('campoCorreo').value;
+    const contrasena = document.getElementById('campoContrasena').value;
+
+    const { error } = await cliente.auth.signInWithPassword({ email: correo, password: contrasena });
+    if (error) {
+      errorLogin.textContent = 'No se pudo entrar: ' + error.message;
+    }
+    // Si funciona, onAuthStateChange más abajo se encarga de mostrar el panel.
+  });
+
+  document.getElementById('botonSalir').addEventListener('click', async () => {
+    await cliente.auth.signOut();
+  });
+
+  cliente.auth.onAuthStateChange((_evento, sesion) => {
+    if (sesion) {
+      pantallaLogin.style.display = 'none';
+      pantallaPanel.style.display = '';
+      iniciarPanel();
+    } else {
+      pantallaPanel.style.display = 'none';
+      pantallaLogin.style.display = 'flex';
+    }
+  });
+
+  // --- A partir de aquí, todo requiere sesión iniciada ---
+
+  const selectorNegocio = document.getElementById('selectorNegocio');
+  const contenido = document.getElementById('contenido');
+  const botones = document.querySelectorAll('nav.tabs button');
+  let listenersListos = false;
+
+  function activarListeners() {
+    if (listenersListos) return;
+    listenersListos = true;
+
+    botones.forEach((boton) => {
+      boton.addEventListener('click', () => {
+        vistaActual = boton.dataset.vista;
+        botones.forEach((b) => b.classList.toggle('activa', b === boton));
+        cargarVista();
+      });
+    });
+
+    document.getElementById('botonRefrescar').addEventListener('click', cargarVista);
+    selectorNegocio.addEventListener('change', () => {
+      negocioActual = selectorNegocio.value;
+      cargarVista();
+    });
+  }
+
+  function formatearFecha(iso) {
+    if (!iso) return '';
+    return new Date(iso).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' });
+  }
+
+  function badgeEstado(estado) {
+    return `<span class="estado estado-${estado}">${estado}</span>`;
+  }
+
+  function tabla(columnas, filas, celda) {
+    if (filas.length === 0) return '<div class="vacio">No hay nada que mostrar todavía.</div>';
+    const encabezado = columnas.map((c) => `<th>${c}</th>`).join('');
+    const cuerpo = filas.map((fila) => `<tr>${celda(fila)}</tr>`).join('');
+    return `<table><thead><tr>${encabezado}</tr></thead><tbody>${cuerpo}</tbody></table>`;
+  }
+
+  async function cargarNegocios() {
+    const { data, error } = await cliente.from('negocios').select('*').order('nombre');
+    if (error) throw error;
+    selectorNegocio.innerHTML = data.map((n) => `<option value="${n.id}">${n.nombre}</option>`).join('');
+    if (data.length > 0) negocioActual = data[0].id;
+  }
+
+  async function iniciarPanel() {
+    activarListeners();
+    try {
+      await cargarNegocios();
+      await cargarVista();
+    } catch (err) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo conectar: ' + err.message;
+    }
+  }
+
+  async function cargarVista() {
+    if (!negocioActual) {
+      contenido.className = 'vacio';
+      contenido.textContent = 'Todavía no hay ningún negocio registrado.';
+      return;
+    }
+
+    contenido.className = 'cargando';
+    contenido.textContent = 'Cargando...';
+
+    try {
+      if (vistaActual === 'citas') {
+        const { data, error } = await cliente
+          .from('citas')
+          .select('id, inicio, fin, estado, motivo_cancelacion, recursos(nombre), servicios(nombre, precio), clientes(nombre, telefono)')
+          .eq('negocio_id', negocioActual)
+          .order('inicio', { ascending: true });
+        if (error) throw error;
+
+        contenido.innerHTML = tabla(
+          ['Inicio', 'Fin', 'Servicio', 'Recurso', 'Cliente', 'Teléfono', 'Estado'],
+          data,
+          (c) => `
+            <td>${formatearFecha(c.inicio)}</td>
+            <td>${formatearFecha(c.fin)}</td>
+            <td>${c.servicios?.nombre ?? '—'}</td>
+            <td>${c.recursos?.nombre ?? '—'}</td>
+            <td>${c.clientes?.nombre ?? '—'}</td>
+            <td>${c.clientes?.telefono ?? '—'}</td>
+            <td>${badgeEstado(c.estado)}</td>
+          `
+        );
+      } else if (vistaActual === 'clientes') {
+        const { data, error } = await cliente
+          .from('clientes')
+          .select('id, nombre, telefono, consentimiento, creado_en')
+          .eq('negocio_id', negocioActual)
+          .order('creado_en', { ascending: false });
+        if (error) throw error;
+
+        contenido.innerHTML = tabla(
+          ['Nombre', 'Teléfono', 'Consentimiento', 'Creado'],
+          data,
+          (c) => `
+            <td>${c.nombre ?? '—'}</td>
+            <td>${c.telefono}</td>
+            <td>${c.consentimiento ? 'Sí' : 'No'}</td>
+            <td>${formatearFecha(c.creado_en)}</td>
+          `
+        );
+      } else if (vistaActual === 'recursos') {
+        const { data, error } = await cliente
+          .from('recursos')
+          .select('id, nombre, creado_en')
+          .eq('negocio_id', negocioActual)
+          .order('nombre');
+        if (error) throw error;
+
+        contenido.innerHTML = tabla(
+          ['Nombre', 'Creado'],
+          data,
+          (r) => `<td>${r.nombre}</td><td>${formatearFecha(r.creado_en)}</td>`
+        );
+      } else if (vistaActual === 'servicios') {
+        const { data, error } = await cliente
+          .from('servicios')
+          .select('id, nombre, duracion_min, precio, anticipo')
+          .eq('negocio_id', negocioActual)
+          .order('nombre');
+        if (error) throw error;
+
+        contenido.innerHTML = tabla(
+          ['Nombre', 'Duración (min)', 'Precio', 'Anticipo'],
+          data,
+          (s) => `
+            <td>${s.nombre}</td>
+            <td>${s.duracion_min}</td>
+            <td>$${Number(s.precio).toFixed(2)}</td>
+            <td>$${Number(s.anticipo).toFixed(2)}</td>
+          `
+        );
+      }
+    } catch (err) {
+      contenido.className = 'error';
+      contenido.textContent = 'No se pudo cargar: ' + err.message;
+    }
+  }
+</script>
+
+</body>
+</html>
