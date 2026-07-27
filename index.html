@@ -132,6 +132,38 @@
   .bloques-dia { display: flex; flex-direction: column; gap: 6px; margin-bottom: 6px; }
   .fila-bloque { display: flex; align-items: center; gap: 8px; }
   .boton-agregar-bloque, .boton-quitar-bloque { font-size: 12px; padding: 4px 10px; }
+
+  .dia-agenda { margin-bottom: 22px; }
+  .dia-agenda-titulo {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--texto-suave);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--gris-borde);
+    margin-bottom: 4px;
+  }
+  .dia-agenda-titulo.es-hoy { color: var(--azul); }
+  .cita-agenda {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 4px;
+    border-bottom: 1px solid var(--gris-borde);
+    flex-wrap: wrap;
+  }
+  .cita-agenda:last-child { border-bottom: none; }
+  .cita-agenda-hora {
+    font-weight: 600;
+    font-size: 13px;
+    width: 110px;
+    flex-shrink: 0;
+    color: var(--texto);
+  }
+  .cita-agenda-info { flex: 1 1 240px; min-width: 0; }
+  .cita-agenda-servicio { font-weight: 600; font-size: 14px; }
+  .cita-agenda-detalle { font-size: 12px; color: var(--texto-suave); margin-top: 2px; }
 </style>
 </head>
 <body>
@@ -343,25 +375,78 @@
     }
 
     contenido.className = '';
+
+    if (citas.length === 0) {
+      contenido.innerHTML = `
+        <div id="mensajeCitas" style="font-size:13px; margin-bottom:12px;"></div>
+        <div class="vacio">No hay nada que mostrar todavía.</div>
+      `;
+      return;
+    }
+
+    // Agrupa las citas (ya vienen ordenadas por "inicio") por día calendario local.
+    const grupos = [];
+    let grupoActual = null;
+    for (const c of citas) {
+      const fecha = new Date(c.inicio);
+      const clave = `${fecha.getFullYear()}-${fecha.getMonth()}-${fecha.getDate()}`;
+      if (!grupoActual || grupoActual.clave !== clave) {
+        grupoActual = { clave, fecha, citas: [] };
+        grupos.push(grupoActual);
+      }
+      grupoActual.citas.push(c);
+    }
+
+    const hoy = new Date();
+    const claveDia = (f) => `${f.getFullYear()}-${f.getMonth()}-${f.getDate()}`;
+    const hoyClave = claveDia(hoy);
+    const mananaClave = claveDia(new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() + 1));
+
+    function tituloDia(grupo) {
+      const formato = grupo.fecha.toLocaleDateString('es-MX', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      });
+      const capitalizado = formato.charAt(0).toUpperCase() + formato.slice(1);
+      if (grupo.clave === hoyClave) return { texto: `Hoy — ${capitalizado}`, esHoy: true };
+      if (grupo.clave === mananaClave) return { texto: `Mañana — ${capitalizado}`, esHoy: false };
+      return { texto: capitalizado, esHoy: false };
+    }
+
+    function horaCorta(iso) {
+      return new Date(iso).toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+    }
+
     contenido.innerHTML = `
       <div id="mensajeCitas" style="font-size:13px; margin-bottom:12px;"></div>
-      ${tabla(
-        ['Inicio', 'Fin', 'Servicio', 'Recurso', 'Cliente', 'Teléfono', 'Estado'],
-        citas,
-        (c) => `
-          <td>${formatearFecha(c.inicio)}</td>
-          <td>${formatearFecha(c.fin)}</td>
-          <td>${c.servicios?.nombre ?? '—'}</td>
-          <td>${c.recursos?.nombre ?? '—'}</td>
-          <td>${c.clientes?.nombre ?? '—'}</td>
-          <td>${c.clientes?.telefono ?? '—'}</td>
-          <td>
-            <select class="selector-estado estado-${c.estado}" data-id="${c.id}">
-              ${ESTADOS_CITA.map((e) => `<option value="${e}" ${e === c.estado ? 'selected' : ''}>${e}</option>`).join('')}
-            </select>
-          </td>
-        `
-      )}
+      ${grupos
+        .map((grupo) => {
+          const titulo = tituloDia(grupo);
+          return `
+            <div class="dia-agenda">
+              <div class="dia-agenda-titulo${titulo.esHoy ? ' es-hoy' : ''}">${titulo.texto}</div>
+              ${grupo.citas
+                .map(
+                  (c) => `
+                    <div class="cita-agenda">
+                      <div class="cita-agenda-hora">${horaCorta(c.inicio)} – ${horaCorta(c.fin)}</div>
+                      <div class="cita-agenda-info">
+                        <div class="cita-agenda-servicio">${c.servicios?.nombre ?? '—'}</div>
+                        <div class="cita-agenda-detalle">${c.recursos?.nombre ?? '—'} · ${c.clientes?.nombre ?? '—'} · ${c.clientes?.telefono ?? '—'}</div>
+                      </div>
+                      <select class="selector-estado estado-${c.estado}" data-id="${c.id}">
+                        ${ESTADOS_CITA.map((e) => `<option value="${e}" ${e === c.estado ? 'selected' : ''}>${e}</option>`).join('')}
+                      </select>
+                    </div>
+                  `
+                )
+                .join('')}
+            </div>
+          `;
+        })
+        .join('')}
     `;
 
     document.querySelectorAll('.selector-estado').forEach((selector) => {
